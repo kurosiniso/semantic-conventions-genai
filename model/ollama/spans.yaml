@@ -1,0 +1,138 @@
+file_format: definition/2
+attribute_groups:
+  - id: attributes.ollama.request
+    visibility: internal
+    attributes:
+      - ref: ollama.request.model
+        requirement_level: required
+      - ref: ollama.request.base_url
+        requirement_level: recommended
+      - ref: ollama.request.stream
+        requirement_level: recommended
+      - ref: ollama.request.temperature
+        requirement_level:
+          conditionally_required: If the model supports temperature.
+      - ref: ollama.request.top_p
+        requirement_level:
+          conditionally_required: If the model supports top_p.
+      - ref: ollama.request.top_k
+        requirement_level:
+          conditionally_required: If the model supports top_k.
+      - ref: ollama.request.max_tokens
+        requirement_level:
+          conditionally_required: If max_tokens is specified.
+      - ref: ollama.request.num_predict
+        requirement_level:
+          conditionally_required: If num_predict is specified.
+      - ref: ollama.request.num_ctx
+        requirement_level:
+          conditionally_required: If num_ctx is specified.
+      - ref: ollama.request.stop
+        requirement_level:
+          conditionally_required: If stop sequences are specified.
+      - ref: ollama.request.repeat_penalty
+        requirement_level:
+          conditionally_required: If repeat_penalty is specified.
+      - ref: ollama.request.seed
+        requirement_level:
+          conditionally_required: If seed is specified.
+      - ref: ollama.request.num_batch
+        requirement_level:
+          conditionally_required: If num_batch is specified.
+      - ref: ollama.request.num_gpu
+        requirement_level:
+          conditionally_required: If num_gpu is specified.
+      - ref: ollama.request.main_gpu
+        requirement_level:
+          conditionally_required: If main_gpu is specified.
+      - ref: ollama.request.low_vram
+        requirement_level:
+          conditionally_required: If low_vram is specified.
+      - ref: ollama.request.f16_kv
+        requirement_level:
+          conditionally_required: If f16_kv is specified.
+
+  - id: attributes.ollama.response
+    visibility: internal
+    attributes:
+      - ref: ollama.response.model
+        requirement_level: required
+      - ref: ollama.response.total_duration
+        requirement_level: recommended
+      - ref: ollama.response.load_duration
+        requirement_level:
+          conditionally_required: If available.
+      - ref: ollama.response.prompt_eval_count
+        requirement_level: recommended
+      - ref: ollama.response.eval_count
+        requirement_level: recommended
+
+spans:
+  - type: ollama.client.chat
+    requirement_level: recommended
+    kind: client
+    name:
+      note: |
+        **Span name** SHOULD be `{gen_ai.operation.name} {ollama.request.model}`.
+    brief: >
+      This span represents a client call to the Ollama chat API.
+    note: |
+      **Span kind** SHOULD be `CLIENT`.
+
+      This span covers the time to receive the response for non-streaming calls
+      and the time to consume the response stream for streaming calls.
+
+      The Ollama chat API allows for text generation using various models.
+    stability: development
+    attributes:
+      - ref_group: attributes.ollama.request
+      - ref_group: attributes.ollama.response
+      - ref_group: attributes.gen_ai.common
+      - ref_group: attributes.gen_ai.address_and_port
+      - ref: gen_ai.usage.input_tokens
+        requirement_level: recommended
+      - ref: gen_ai.usage.output_tokens
+        requirement_level: recommended
+
+  - type: ollama.client.generate
+    requirement_level: recommended
+    kind: client
+    name:
+      note: |
+        **Span name** SHOULD be `{gen_ai.operation.name} {ollama.request.model}`.
+    brief: >
+      This span represents a client call to the Ollama generate API for text completion.
+    note: |
+      **Span kind** SHOULD be `CLIENT`.
+
+      The generate API is a lower-level API that provides more control over
+      the generation process.
+    stability: development
+    attributes:
+      - ref_group: attributes.ollama.request
+      - ref_group: attributes.ollama.response
+      - ref_group: attributes.gen_ai.common
+      - ref_group: attributes.gen_ai.address_and_port
+      - ref: gen_ai.usage.input_tokens
+        requirement_level: recommended
+      - ref: gen_ai.usage.output_tokens
+        requirement_level: recommended
+
+  - type: ollama.client.embeddings
+    requirement_level: recommended
+    kind: client
+    name:
+      note: |
+        **Span name** SHOULD be `{gen_ai.operation.name} {ollama.request.model}`.
+    brief: >
+      This span represents a client call to the Ollama embeddings API.
+    note: |
+      **Span kind** SHOULD be `CLIENT`.
+
+      The embeddings API generates vector embeddings for text.
+    stability: development
+    attributes:
+      - ref_group: attributes.ollama.request
+      - ref_group: attributes.ollama.response
+      - ref_group: attributes.gen_ai.common
+      - ref_group: attributes.gen_ai.address_and_port

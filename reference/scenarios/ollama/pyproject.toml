@@ -1,0 +1,21 @@
+[project]
+name = "ollama-scenario"
+version = "0.1.0"
+description = "Reference scenario for Ollama semantic conventions"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+    "opentelemetry-instrumentation-httpx>=0.47.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+extras = ["all"]
