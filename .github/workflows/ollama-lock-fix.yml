@@ -1,0 +1,73 @@
+name: Ollama scenario lock fix
+
+on:
+  push:
+    branches: [tools/ollama-lock-fix]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ollama-lock-fix
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/ollama-v3
+          persist-credentials: true
+
+      - name: Declare expected violation in conformance.yaml
+        run: |
+          printf '%s' "$OLLAMA_CONF_B64" | base64 -d > reference/scenarios/ollama/conformance.yaml
+          cat reference/scenarios/ollama/conformance.yaml
+        env:
+          OLLAMA_CONF_B64: cnVubmVyOiBnZW5haS1jb25mb3JtYW5jZQppbnN0cnVtZW50ZWRfbGlicmFyeTogb2xsYW1hCmluc3RydW1lbnRhdGlvbl9saWJyYXJ5OiByZWZlcmVuY2UKCnNlcnZlcjoKICBydW46IGdlbmFpLW1vY2stc2VydmVyIC0taG9zdCAxMjcuMC4wLjEgLS1wb3J0ICR7UE9SVH0KCmVudjoKICBNT0NLX0xMTV9VUkw6ICR7TU9DS19TRVJWRVJfVVJMfQoKc2NlbmFyaW9zOgogIHJlZmVyZW5jZToKICAgIHJ1bjogdXYgcnVuIC0tZnJvemVuIC0tcHl0aG9uIDMuMTIgLS1wcm9qZWN0IC4gcHl0aG9uIHNjZW5hcmlvLnB5CiAgICBleHBlY3RlZF92aW9sYXRpb25zOgogICAgICAtIGlkOiBnZW5haV9leHBlY3RlZF9hdHRyaWJ1dGVfbWlzc2luZwogICAgICAgIGNvbnRleHQ6CiAgICAgICAgICBvcGVyYXRpb246IGNoYXQKICAgICAgICAgIG1pc3NpbmdfYXR0cmlidXRlOiBnZW5fYWkucmVzcG9uc2UuaWQKICAgICAgICByZWFzb246IE9sbGFtYSdzIEFQSSBkb2VzIG5vdCByZXR1cm4gYSByZXNwb25zZSBpZCwgc28gdGhlIHJlZmVyZW5jZSBpbXBsZW1lbnRhdGlvbiBjYW5ub3Qgc2V0IGdlbl9haS5yZXNwb25zZS5pZC4KICAgIHNwYW5zOgogICAgICAtIG1hdGNoOgogICAgICAgICAgYXR0cmlidXRlczoKICAgICAgICAgICAgZ2VuX2FpLm9wZXJhdGlvbi5uYW1lOiBjaGF0CiAgICAgICAgICB0eXBlOiBnZW5fYWkuY2xpZW50LmluZmVyZW5jZQo=
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Regenerate ollama scenario lockfile
+        run: |
+          cd reference/scenarios/ollama
+          uv lock
+
+      - name: Sync reference tooling
+        working-directory: reference
+        run: uv sync --locked
+
+      - name: Run ollama scenario and regenerate data.json
+        working-directory: reference
+        run: |
+          for attempt in 1 2 3 4 5; do
+            log=$(uv run run-scenario ollama --strict 2>&1)
+            status=$?
+            echo "$log"
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if echo "$log" | grep -qiE "failed to fetch|503|service unavailable|tarball"; then
+              echo "::notice::Transient conformance runner fetch failure, retry attempt $attempt/5"
+              sleep 20
+              continue
+            fi
+            exit 1
+          done
+          exit 1
+
+      - name: Commit and push to feat/ollama-v3
+        run: |
+          git config user.name "kurosiniso"
+          git config user.email "kurosi78@laposte.net"
+          git add reference/scenarios/ollama
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git diff --cached --stat
+          git commit -s -m "fix(reference/ollama): regenerate lock for ollama 0.6.3 and declare expected violation for gen_ai.response.id" -m "The committed lockfile still resolved ollama 0.3.0, whose client returns plain dicts, so scenario.py crashed before recording response attributes. Regenerate the lock against the declared ollama==0.6.3 and declare the missing gen_ai.response.id as an expected violation: Ollama's API does not return a response id."
+          git push origin HEAD:feat/ollama-v3
