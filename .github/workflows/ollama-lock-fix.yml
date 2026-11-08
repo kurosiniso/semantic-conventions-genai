@@ -1,0 +1,76 @@
+name: Ollama regeneration
+
+on:
+  push:
+    branches: [tools/ollama-lock-fix]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout feat/ollama-v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/ollama-v3
+          persist-credentials: true
+
+      - name: Load version pins
+        id: versions
+        uses: ./.github/actions/load-version-pins
+
+      - name: Set up weaver
+        uses: open-telemetry/weaver/.github/actions/setup-weaver@f8e1b42fbd1e09df5263c26b7df6011eaafd454d
+        with:
+          version: '${{ steps.versions.outputs.weaver_version }}'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c8c839dc7
+
+      - name: Sync reference dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            (cd reference && uv sync --locked) && break
+            echo "sync retry $i"; sleep 30
+          done
+
+      - name: Run ollama scenario (regenerates data.json)
+        run: |
+          cd reference
+          output=""
+          for i in $(seq 1 10); do
+            if output=$(uv run run-scenario ollama --strict 2>&1); then
+              echo "$output"
+              exit 0
+            fi
+            echo "$output"
+            if echo "$output" | grep -qiE "failed to fetch|503|service unavailable|timed ?out"; then
+              echo "transient fetch failure, retry $i"; sleep 30; continue
+            fi
+            exit 1
+          done
+          echo "retries exhausted"; exit 1
+
+      - name: Generate docs and reports
+        run: |
+          for i in 1 2 3 4 5; do
+            if make generate-all; then break; fi
+            echo "generate-all retry $i"; sleep 30
+          done
+          cd reference
+          for i in 1 2 3 4 5; do
+            if uv run --frozen update-reports; then break; fi
+            echo "update-reports retry $i"; sleep 30
+          done
+
+      - name: Commit regenerated artifacts
+        run: |
+          git config user.name "kurosiniso"
+          git config user.email "kurosi78@laposte.net"
+          git add -A
+          git commit -s -m "chore(reference/ollama): regenerate data.json, registry docs, and reports after review changes"
+          git push origin HEAD:feat/ollama-v3
