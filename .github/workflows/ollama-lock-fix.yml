@@ -28,11 +28,14 @@ jobs:
         with:
           version: '${{ steps.versions.outputs.weaver_version }}'
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Sync reference dependencies
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           for i in 1 2 3 4 5; do
             (cd reference && uv sync --locked) && break
             echo "sync retry $i"; sleep 30
@@ -40,6 +43,7 @@ jobs:
 
       - name: Run ollama scenario (regenerates data.json)
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           cd reference
           output=""
           for i in $(seq 1 10); do
@@ -57,6 +61,7 @@ jobs:
 
       - name: Generate docs and reports
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           for i in 1 2 3 4 5; do
             if make generate-all; then break; fi
             echo "generate-all retry $i"; sleep 30
