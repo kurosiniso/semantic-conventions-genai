@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  issues: write
+  contents: read
+  pull-requests: write
 
 concurrency:
   group: watch-upstream-pr-700
@@ -18,9 +19,9 @@ jobs:
     timeout-minutes: 10
     env:
       UPSTREAM_REPO: open-telemetry/semantic-conventions-genai
-      PR_NUMBER: "700"
+      UPSTREAM_PR: "700"
+      FORK_PR: "1"
       LOOKBACK_HOURS: "24"
-      WATCH_ISSUE_TITLE: "Upstream PR #700 activity"
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -41,9 +42,10 @@ jobs:
           events=$(mktemp)
           reported=$(mktemp)
           bodyfile=$(mktemp)
+          report=$(mktemp)
 
           # Pull request state changes
-          pr=$(api "repos/$UPSTREAM_REPO/pulls/$PR_NUMBER")
+          pr=$(api "repos/$UPSTREAM_REPO/pulls/$UPSTREAM_PR")
           state=$(jq -r '.state' <<<"$pr")
           merged=$(jq -r '.merged' <<<"$pr")
           if [ "$merged" = "true" ]; then
@@ -53,31 +55,25 @@ jobs:
           fi
 
           # New issue comments
-          api "repos/$UPSTREAM_REPO/issues/$PR_NUMBER/comments?since=$cutoff&per_page=100" \
+          api "repos/$UPSTREAM_REPO/issues/$UPSTREAM_PR/comments?since=$cutoff&per_page=100" \
             | jq -r '.[] | select(.user.login != "kurosiniso") | "comment:" + (.id|tostring) + "\tNew issue comment by " + .user.login + " (" + .created_at + "): " + ((.body // "") | gsub("[\\r\\n\\t]+"; " ") | .[0:160])' >> "$events" || true
 
           # New reviews
-          api "repos/$UPSTREAM_REPO/pulls/$PR_NUMBER/reviews?per_page=100" \
+          api "repos/$UPSTREAM_REPO/pulls/$UPSTREAM_PR/reviews?per_page=100" \
             | jq -r --arg cutoff "$cutoff" '.[] | select(.submitted_at != null and .submitted_at >= $cutoff and .user.login != "kurosiniso") | "review:" + (.id|tostring) + "\tNew review by " + .user.login + " (state: " + (.state // "unknown") + ")"' >> "$events" || true
 
           # New review comments
-          api "repos/$UPSTREAM_REPO/pulls/$PR_NUMBER/comments?since=$cutoff&per_page=100" \
+          api "repos/$UPSTREAM_REPO/pulls/$UPSTREAM_PR/comments?since=$cutoff&per_page=100" \
             | jq -r '.[] | select(.user.login != "kurosiniso") | "reviewcomment:" + (.id|tostring) + "\tNew review comment by " + .user.login + " on " + (.path // "?") + ": " + ((.body // "") | gsub("[\\r\\n\\t]+"; " ") | .[0:160])' >> "$events" || true
 
           # New commits pushed by others
-          api "repos/$UPSTREAM_REPO/pulls/$PR_NUMBER/commits?per_page=100" \
+          api "repos/$UPSTREAM_REPO/pulls/$UPSTREAM_PR/commits?per_page=100" \
             | jq -r --arg cutoff "$cutoff" '.[] | select(((.commit.committer.date // "") >= $cutoff) and ((.author.login // .commit.author.name) != "kurosiniso")) | "commit:" + .sha + "\tNew commit by " + (.author.login // .commit.author.name) + ": " + (.commit.message | split("\n")[0] | .[0:140])' >> "$events" || true
 
-          # Find the tracking issue
-          issue_number=$(gh issue list --state open --limit 100 --json number,title \
-            --jq '.[] | select(.title == env.WATCH_ISSUE_TITLE) | .number' | head -n1 || true)
-
-          if [ -n "${issue_number:-}" ]; then
-            gh issue view "$issue_number" --json comments --jq '.comments[].body' > "$reported" || true
-          fi
+          # Previously reported ids live in this PR's comments
+          gh pr view "$FORK_PR" --json comments --jq '.comments[].body' > "$reported" || true
 
           # Deduplicate against previously reported ids
-          report=$(mktemp)
           while IFS=$'\t' read -r id desc; do
             [ -z "$id" ] && continue
             if grep -qF "[id:$id]" "$reported"; then continue; fi
@@ -85,22 +81,17 @@ jobs:
           done < "$events"
 
           if [ ! -s "$report" ]; then
-            echo "No new activity on upstream PR #$PR_NUMBER since $cutoff (after dedup)."
+            echo "No new activity on upstream PR #$UPSTREAM_PR since $cutoff (after dedup)."
             exit 0
           fi
 
           {
-            echo "New activity detected on upstream PR #$PR_NUMBER:"
+            echo "New activity detected on upstream PR #$UPSTREAM_PR:"
             echo ""
             cat "$report"
             echo ""
-            echo "https://github.com/$UPSTREAM_REPO/pull/$PR_NUMBER"
+            echo "https://github.com/$UPSTREAM_REPO/pull/$UPSTREAM_PR"
           } > "$bodyfile"
 
-          if [ -n "$issue_number" ]; then
-            gh issue comment "$issue_number" --body-file "$bodyfile"
-            echo "Posted update to tracking issue #$issue_number."
-          else
-            gh issue create --title "$WATCH_ISSUE_TITLE" --body-file "$bodyfile"
-            echo "Created the tracking issue."
-          fi
+          gh pr comment "$FORK_PR" --body-file "$bodyfile"
+          echo "Posted update to fork PR #$FORK_PR."
