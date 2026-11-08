@@ -79,3 +79,4 @@ jobs:
           git add -A
           git commit -s -m "chore(reference/ollama): regenerate data.json, registry docs, and reports after review changes"
           git push origin HEAD:feat/ollama-v3
+          # regen pass 2 (encoding_formats violation declared)
