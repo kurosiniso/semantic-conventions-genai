@@ -1,0 +1,74 @@
+name: Ollama regeneration
+
+on:
+  push:
+    branches: [tools/ollama-lock-fix]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/ollama-v3
+          persist-credentials: true
+      - name: Load version pins
+        uses: ./.github/actions/load-version-pins
+      - name: Setup Weaver
+        uses: open-telemetry/weaver/.github/actions/setup-weaver@f8e1b42fbd1e09df5263c26b7df6011eaafd454d
+        with:
+          version: '${{ steps.versions.outputs.weaver_version }}'
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run scenario
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd reference
+          uv sync --locked
+          for i in 1 2 3; do
+            set +e
+            uv run run-scenario ollama --strict > /tmp/scenario.log 2>&1
+            status=$?
+            set -e
+            cat /tmp/scenario.log
+            if [ $status -eq 0 ]; then
+              break
+            fi
+            if ! grep -qiE "failed to fetch|503|service unavailable|timed ?out" /tmp/scenario.log; then
+              echo "Scenario failed for a non-transient reason"
+              exit 1
+            fi
+            if [ $i -eq 3 ]; then
+              echo "Scenario kept failing after retries"
+              exit 1
+            fi
+            sleep 10
+          done
+      - name: Generate docs
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          make generate-all
+      - name: Update reports
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd reference
+          uv run --frozen update-reports
+      - name: Commit and push
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          git config user.name kurosiniso
+          git config user.email kurosi78@laposte.net
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -s -m "chore(reference/ollama): regenerate data.json, registry docs, and reports after review changes"
+          git push origin HEAD:feat/ollama-v3
