@@ -1,0 +1,198 @@
+name: ollama-tooldefs-fix
+
+on:
+  push:
+    branches:
+      - tools/ollama-tooldefs-fix
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ollama-tooldefs-fix
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: github.repository == 'kurosiniso/semantic-conventions-genai'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/ollama-v3
+          fetch-depth: 0
+      - name: Apply tool-definitions capture gating
+        run: |
+          cat > /tmp/patch.py <<'PYEOF'
+          import pathlib
+          
+          scen = pathlib.Path("reference/scenarios/ollama/scenario.py")
+          conf = pathlib.Path("reference/scenarios/ollama/conformance.yaml")
+          s = scen.read_text()
+          c = conf.read_text()
+          
+          reps_s = [
+          (
+          '''# registry note and the content-recording guidance. The reference scenario
+          # records them whenever a tool is offered, so the conformance runner can
+          # assert the definitions are recorded.'''
+          ,
+          '''# registry note. They are content, so the scenario records them per the
+          # content capture configuration: on the span when a span-enabled mode is
+          # active and on the operation details event when an event-enabled mode is
+          # active. The tool-call scenarios run with the SPAN_AND_EVENT capture mode,
+          # so the conformance runner can assert the definitions are recorded on the
+          # span, and the operation details events carry them as well.'''
+          ),
+          ("def run_chat_with_tools(client, base_url):",
+          "def run_chat_with_tools(client, base_url, *, capture_mode=None):"),
+          (
+          '''    tools as `gen_ai.tool.definitions`, recorded per the content-recording
+              guidance; the operation details event records'''
+          ,
+          '''    tools as `gen_ai.tool.definitions`, recorded on the span and the event
+              only on the capture sides the content capture configuration enables;
+              this scenario runs with the SPAN_AND_EVENT mode so both sides are
+              exercised. The event records'''
+          ),
+          (
+          '''    print("  [chat] tool call (reference implementation)")
+              mode = _capture_mode()'''
+          ,
+          '''    print("  [chat] tool call (reference implementation)")
+              mode = _capture_mode() if capture_mode is None else capture_mode'''
+          ),
+          (
+          '''    span_attributes["gen_ai.tool.definitions"] = tool_definitions'''
+          ,
+          '''    # Tool definitions are content: they are recorded on the span when the
+              # SPAN_ONLY or SPAN_AND_EVENT capture mode is enabled, per the content
+              # capture configuration section of docs/gen-ai/gen-ai-spans.md.
+              if _record_span_messages(mode):
+                  span_attributes["gen_ai.tool.definitions"] = tool_definitions'''
+          ),
+          (
+          '''            event_attrs["gen_ai.tool.definitions"] = tool_definitions
+                      if _record_event_messages(mode):
+                          event_attrs["gen_ai.input.messages"] = ['''
+          ,
+          '''            if _record_event_messages(mode):
+                          event_attrs["gen_ai.tool.definitions"] = tool_definitions
+                          event_attrs["gen_ai.input.messages"] = ['''
+          ),
+          (
+          '''    if tools:
+                  span_attributes["gen_ai.tool.definitions"] = _WEATHER_TOOL_DEFINITIONS'''
+          ,
+          '''    # Tool definitions are content: they are recorded on the span when the
+              # SPAN_ONLY or SPAN_AND_EVENT capture mode is enabled, per the content
+              # capture configuration section of docs/gen-ai/gen-ai-spans.md.
+              if tools and _record_span_messages(mode):
+                  span_attributes["gen_ai.tool.definitions"] = _WEATHER_TOOL_DEFINITIONS'''
+          ),
+          (
+          '''            if tools:
+                          event_attrs["gen_ai.tool.definitions"] = _WEATHER_TOOL_DEFINITIONS'''
+          ,
+          '''            if tools and _record_event_messages(mode):
+                          # The event records the offered tool definitions only when
+                          # event capture is enabled, per the content capture
+                          # configuration.
+                          event_attrs["gen_ai.tool.definitions"] = _WEATHER_TOOL_DEFINITIONS'''
+          ),
+          (
+          '''        run_chat_streaming(client, base_url, tools=_WEATHER_TOOLS, seed=48, mock_host="127.0.0.1", mock_port=port)'''
+          ,
+          '''        run_chat_streaming(
+                      client,
+                      base_url,
+                      tools=_WEATHER_TOOLS,
+                      seed=48,
+                      capture_mode="SPAN_AND_EVENT",
+                      mock_host="127.0.0.1",
+                      mock_port=port,
+                  )'''
+          ),
+          (
+          '''    by the reasoning chunk, per the chunk definition.
+              """'''
+          ,
+          '''    by the reasoning chunk, per the chunk definition. The run uses the
+              SPAN_AND_EVENT capture mode, so the offered tool definitions are also
+              recorded on the span, per the content capture configuration.
+              """'''
+          ),
+          (
+          '''    run_chat_with_tools(client, MOCK_BASE_URL)'''
+          ,
+          '''    # The tool-call scenarios run with the SPAN_AND_EVENT capture mode: tool
+              # definitions are content, so recording them on the span requires a
+              # span-enabled capture mode, while the event side stays enabled too.
+              run_chat_with_tools(client, MOCK_BASE_URL, capture_mode="SPAN_AND_EVENT")'''
+          ),
+          ]
+          
+          reps_c = [
+          (
+          '''      # The tool-call scenario is singled out by its seed and must record the
+                # offered tool definitions and the provider-reported finish reason.'''
+          ,
+          '''      # The tool-call scenario is singled out by its seed: the run uses the
+                # SPAN_AND_EVENT capture mode, so the content capture configuration
+                # enables recording the offered tool definitions on the span, alongside
+                # the provider-reported finish reason.'''
+          ),
+          (
+          '''      # The streaming tool-call scenario is singled out by its seed: the
+                # request offers the weather tool, so the span carries the tool
+                # definitions, and the first chunk with output carries the tool-call
+                # payload, so the time to it is recorded.'''
+          ,
+          '''      # The streaming tool-call scenario is singled out by its seed: the
+                # request offers the weather tool, so the span carries the tool
+                # definitions (the run uses the SPAN_AND_EVENT capture mode, enabling
+                # the definitions on the span per the content capture configuration),
+                # and the first chunk with output carries the tool-call payload, so
+                # the time to it is recorded.'''
+          ),
+          ]
+          
+          def apply(text, reps):
+              for old, new in reps:
+                  n = text.count(old)
+                  if n != 1:
+                      raise SystemExit("expected exactly 1 occurrence, got %d for: %s" % (n, old[:70]))
+                  text = text.replace(old, new)
+              return text
+          
+          scen.write_text(apply(s, reps_s))
+          conf.write_text(apply(c, reps_c))
+          print("patched scenario.py and conformance.yaml")
+          PYEOF
+          python3 /tmp/patch.py
+      - name: Load shared version pins
+        id: versions
+        uses: ./.github/actions/load-version-pins
+      - name: Install Weaver
+        uses: open-telemetry/weaver/.github/actions/setup-weaver@f8e1b42fbd1e09df5263c26b7df6011eaafd454d
+        with:
+          version: '${{ steps.versions.outputs.weaver_version }}'
+      - uses: ./.github/actions/setup-reference-tooling
+      - name: Run ollama scenario strictly and refresh reports
+        working-directory: reference
+        run: |
+          uv run run-scenario ollama --strict
+          uv run --locked update-reports
+      - name: Commit and push
+        run: |
+          git config user.name "kurosiniso"
+          git config user.email "kurosiniso@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "fix(reference/ollama): record tool definitions per the content capture configuration"
+          git push origin feat/ollama-v3
